@@ -12,5 +12,4 @@ langchain-text-splitters==0.3.9
 openai==1.102.0
 pydantic==2.11.7
 pydantic-settings==2.10.1
-edge-tts==7.2.8
 ultralytics==8.3.26

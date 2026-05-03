@@ -83,7 +83,7 @@ def healthcheck() -> dict[str, str]:
 def frontend_config() -> FrontendConfigResponse:
     return FrontendConfigResponse(
         default_avatar_url=settings.default_avatar_url,
-        default_voice=settings.edge_tts_voice,
+        default_voice=settings.default_tts_voice,
     )
 
 

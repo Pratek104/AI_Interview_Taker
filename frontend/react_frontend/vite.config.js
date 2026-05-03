@@ -11,6 +11,7 @@ export default defineConfig({
       '/upload': 'http://127.0.0.1:8000',
       '/chat': 'http://127.0.0.1:8000',
       '/generate-speech': 'http://127.0.0.1:8000',
+      '/proctoring': 'http://127.0.0.1:8000',
       '/3dmodel': 'http://127.0.0.1:8000',
     },
   },

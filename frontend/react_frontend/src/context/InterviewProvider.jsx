@@ -16,7 +16,7 @@ const initialState = {
   openingMessage: '',
   messages: [],
   retrievedContext: [],
-  defaultVoice: 'en-US-AvaMultilingualNeural',
+  defaultVoice: 'austin',
   apiReady: false,
   configLoaded: false,
   sessionLoading: false,

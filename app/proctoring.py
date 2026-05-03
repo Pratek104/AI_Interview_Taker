@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from threading import Lock
 
 from PIL import Image
 from ultralytics import YOLO
+
+PHONE_LABEL_KEYWORDS = ("phone", "smartphone", "mobile")
 
 
 @dataclass
@@ -20,11 +23,23 @@ class YoloProctoringService:
     Lightweight wrapper around YOLO object detection for proctoring signals.
     """
 
-    def __init__(self, model_name: str = "yolov8n.pt", phone_confidence_threshold: float = 0.2) -> None:
-        self._model_name = model_name
+    def __init__(self, model_name: str | None = None, phone_confidence_threshold: float = 0.15) -> None:
+        self._model_name = self._resolve_model_name(model_name)
         self._phone_confidence_threshold = phone_confidence_threshold
         self._model: YOLO | None = None
         self._lock = Lock()
+
+    def _resolve_model_name(self, model_name: str | None) -> str:
+        if model_name:
+            return model_name
+
+        project_root = Path(__file__).resolve().parent.parent
+        preferred_models = ("yolov8m.pt", "yolov8n.pt")
+        for candidate in preferred_models:
+            model_path = project_root / candidate
+            if model_path.exists():
+                return str(model_path)
+        return preferred_models[-1]
 
     def _get_model(self) -> YOLO:
         if self._model is not None:
@@ -37,7 +52,7 @@ class YoloProctoringService:
     def detect_phone(self, image_bytes: bytes) -> PhoneDetectionResult:
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
         model = self._get_model()
-        results = model.predict(image, verbose=False, conf=0.1)
+        results = model.predict(image, verbose=False, conf=0.05, imgsz=960)
         if not results:
             return PhoneDetectionResult(phone_detected=False, confidence=0.0, label="")
 
@@ -56,7 +71,7 @@ class YoloProctoringService:
                 best_confidence = confidence
                 best_label = label
             # Different YOLO exports can use slightly different label text.
-            is_phone_label = "phone" in label
+            is_phone_label = any(keyword in label for keyword in PHONE_LABEL_KEYWORDS)
             if is_phone_label and confidence > best_phone_confidence:
                 best_phone_confidence = confidence
             if is_phone_label and confidence >= self._phone_confidence_threshold:
