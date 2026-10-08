@@ -46,7 +46,11 @@ const FACE_MISSING_VIOLATION_WINDOW_MS = 1500;
 const LOOK_AWAY_VIOLATION_WINDOW_MS = 1500;
 const LOOK_DOWN_VIOLATION_WINDOW_MS = 1500;
 const SUSPICIOUS_MOTION_VIOLATION_WINDOW_MS = 1300;
-const PHONE_DETECTION_VIOLATION_WINDOW_MS = 2000;
+const PHONE_CONFIRM_STREAK = 2;
+const PHONE_VIOLATION_STREAK = 3;
+const FACE_TRACKER_STALL_MS = 5000;
+const FACE_TRACKER_RECOVERY_COOLDOWN_MS = 10000;
+const FACE_BOX_UPDATE_MS = 200;
 const HEAD_YAW_MAX = 0.42;
 const HEAD_PITCH_DOWN_MAX = 0.26;
 const SUSPICIOUS_MOTION_DELTA_THRESHOLD = 0.55;
@@ -146,6 +150,12 @@ export function InterviewPage() {
   });
   const noFaceSinceRef = useRef(null);
   const phoneDetectedSinceRef = useRef(null);
+  const phoneStreakRef = useRef(0);
+  const lastFaceCallbackAtRef = useRef(0);
+  const lastFaceBoxAtRef = useRef(0);
+  const lastFaceBoxRef = useRef(null);
+  const isFaceDetectedRef = useRef(false);
+  const lastJeelizRecoveryAtRef = useRef(0);
   const hiddenSinceRef = useRef(null);
   const proctoringStartInFlightRef = useRef(false);
   const proctoringSessionRef = useRef(0);
@@ -234,6 +244,13 @@ export function InterviewPage() {
       }
       return { label, tone };
     });
+  }, []);
+
+  const updateBehaviorSignals = useCallback((next) => {
+    const now = Date.now();
+    if (now - behaviorUpdateAtRef.current < 120) return;
+    behaviorUpdateAtRef.current = now;
+    setBehaviorSignals((current) => ({ ...current, ...next }));
   }, []);
 
   const registerViolation = useCallback((type, reason) => {
@@ -458,6 +475,12 @@ export function InterviewPage() {
     };
     noFaceSinceRef.current = null;
     phoneDetectedSinceRef.current = null;
+    phoneStreakRef.current = 0;
+    lastFaceCallbackAtRef.current = 0;
+    lastFaceBoxAtRef.current = 0;
+    lastFaceBoxRef.current = null;
+    isFaceDetectedRef.current = false;
+    lastJeelizRecoveryAtRef.current = 0;
     hiddenSinceRef.current = null;
     proctoringGraceUntilRef.current = 0;
     behaviorUpdateAtRef.current = 0;
@@ -513,13 +536,6 @@ export function InterviewPage() {
     setLiveProctoringStatus('Proctoring stopped', 'neutral');
   }, [resetProctoringSignals, setLiveProctoringStatus, stopJeelizTracking]);
 
-  const updateBehaviorSignals = useCallback((next) => {
-    const now = Date.now();
-    if (now - behaviorUpdateAtRef.current < 120) return;
-    behaviorUpdateAtRef.current = now;
-    setBehaviorSignals((current) => ({ ...current, ...next }));
-  }, []);
-
   const startJeelizTracking = useCallback((sessionId) => {
     if (jeelizStartingRef.current || jeelizReadyRef.current) return;
     const videoElement = cameraVideoRef.current;
@@ -544,16 +560,24 @@ export function InterviewPage() {
           return;
         }
         jeelizReadyRef.current = true;
+        lastFaceCallbackAtRef.current = Date.now();
       },
       callbackTrack: (detectState) => {
         if (proctoringSessionRef.current !== sessionId) return;
         const now = Date.now();
+        lastFaceCallbackAtRef.current = now;
         const detectionConfidence = Number(detectState?.detected || 0);
         const hasFace = detectionConfidence >= 0.6;
 
         if (!hasFace) {
-          setIsFaceDetected(false);
-          setFaceBox(null);
+          if (isFaceDetectedRef.current) {
+            isFaceDetectedRef.current = false;
+            setIsFaceDetected(false);
+          }
+          if (lastFaceBoxRef.current !== null) {
+            lastFaceBoxRef.current = null;
+            setFaceBox(null);
+          }
           updateBehaviorSignals({
             face: 'Missing',
             lookAway: 'No',
@@ -588,13 +612,29 @@ export function InterviewPage() {
         const left = Math.min(100 - boxWidthPct, Math.max(0, centerXPct - boxWidthPct / 2));
         const top = Math.min(100 - boxHeightPct, Math.max(0, centerYPct - boxHeightPct / 2));
 
-        setIsFaceDetected(true);
-        setFaceBox({
-          left: `${left}%`,
-          top: `${top}%`,
-          width: `${boxWidthPct}%`,
-          height: `${boxHeightPct}%`,
-        });
+        if (!isFaceDetectedRef.current) {
+          isFaceDetectedRef.current = true;
+          setIsFaceDetected(true);
+        }
+        // Throttle overlay updates: Jeeliz fires every frame (~30fps) and
+        // setState on every frame causes a re-render storm that freezes the
+        // UI after a couple of minutes. Update at most ~5fps or on big moves.
+        const prevBox = lastFaceBoxRef.current;
+        const boxMoved = !prevBox
+          || Math.abs(prevBox.left - left) > 2.5
+          || Math.abs(prevBox.top - top) > 2.5
+          || Math.abs(prevBox.width - boxWidthPct) > 3;
+        if (boxMoved || now - lastFaceBoxAtRef.current >= FACE_BOX_UPDATE_MS) {
+          lastFaceBoxAtRef.current = now;
+          const nextBox = {
+            left: `${left}%`,
+            top: `${top}%`,
+            width: `${boxWidthPct}%`,
+            height: `${boxHeightPct}%`,
+          };
+          lastFaceBoxRef.current = { left, top, width: boxWidthPct, height: boxHeightPct };
+          setFaceBox(nextBox);
+        }
 
         const lookAwayNow = Math.abs(yaw) > HEAD_YAW_MAX;
         const lookDownNow = pitch > HEAD_PITCH_DOWN_MAX;
@@ -671,16 +711,22 @@ export function InterviewPage() {
     const canvas = captureCanvasRef.current;
     if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) return false;
     if (phoneCheckInFlightRef.current) return false;
+    // Skip frames while tab hidden or video stalled — stale frames are a
+    // classic source of false "phone" hits.
+    if (document.hidden || video.readyState < 2 || video.paused || video.ended) return false;
 
     phoneCheckInFlightRef.current = true;
     try {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Downscale to max 640px wide: matches model imgsz, cuts bandwidth,
+      // and removes tiny high-frequency false positives.
+      const scale = Math.min(1, 640 / video.videoWidth);
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
       const ctx = canvas.getContext('2d');
       if (!ctx) return false;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
       if (!blob) return false;
 
       const result = await detectPhoneInFrame(blob);
@@ -700,6 +746,7 @@ export function InterviewPage() {
     }
 
     proctoringGraceUntilRef.current = Date.now() + PROCTORING_STARTUP_GRACE_MS;
+    lastFaceCallbackAtRef.current = Date.now();
     monitorIntervalRef.current = setInterval(async () => {
       if (proctoringSessionRef.current !== sessionId) return;
 
@@ -709,13 +756,12 @@ export function InterviewPage() {
         return;
       }
 
-      let nextStatus = { label: 'Monitoring camera', tone: 'neutral' };
-
       if (document.hidden) {
         registerViolation('tabSwitch', 'Interview tab hidden');
         setLiveProctoringStatus('Interview tab hidden', 'danger');
         noFaceSinceRef.current = null;
         phoneDetectedSinceRef.current = null;
+        phoneStreakRef.current = 0;
         faceSignalRef.current.looksAwaySince = null;
         faceSignalRef.current.looksDownSince = null;
         faceSignalRef.current.suspiciousMotionSince = null;
@@ -729,26 +775,80 @@ export function InterviewPage() {
       }
       hiddenSinceRef.current = null;
 
+      // --- Face-tracker stall watchdog ---
+      // Jeeliz sometimes stops emitting callbackTrack (WebGL hiccup / tab
+      // throttle) while the last face box stays frozen on screen. Detect the
+      // stall here, clear the stale overlay, and restart tracking.
+      const msSinceFaceCallback = now - (lastFaceCallbackAtRef.current || now);
+      if (
+        jeelizReadyRef.current
+        && msSinceFaceCallback > FACE_TRACKER_STALL_MS
+        && hasLiveVideoTrack(cameraStreamRef.current)
+      ) {
+        if (lastFaceBoxRef.current !== null) {
+          lastFaceBoxRef.current = null;
+          setFaceBox(null);
+        }
+        if (isFaceDetectedRef.current) {
+          isFaceDetectedRef.current = false;
+          setIsFaceDetected(false);
+        }
+        // Keep the video element alive — a paused element also freezes Jeeliz.
+        try {
+          const video = cameraVideoRef.current;
+          if (video && video.paused && video.srcObject) {
+            await video.play().catch(() => {});
+          }
+        } catch { /* ignore autoplay nudges */ }
+        if (now - lastJeelizRecoveryAtRef.current >= FACE_TRACKER_RECOVERY_COOLDOWN_MS) {
+          lastJeelizRecoveryAtRef.current = now;
+          setLiveProctoringStatus('Face tracker stalled — recovering...', 'warning');
+          updateBehaviorSignals({ face: 'Recovering' });
+          try {
+            stopJeelizTracking();
+            // Small delay so the old WebGL context fully releases.
+            await new Promise((resolve) => setTimeout(resolve, 400));
+            if (proctoringSessionRef.current !== sessionId) return;
+            lastFaceCallbackAtRef.current = Date.now();
+            startJeelizTracking(sessionId);
+          } catch { /* recovery retried on next stall window */ }
+        }
+        // Skip phone inference on this tick while recovering.
+        return;
+      }
+
+      // --- Phone detection with streak confirmation ---
+      // A single YOLO hit is NOT a violation: require consecutive positives
+      // across polls so one stray false positive can't nuke merit.
       const phoneDetected = await detectPhoneFromCurrentFrame();
       if (phoneDetected) {
+        phoneStreakRef.current += 1;
         if (!phoneDetectedSinceRef.current) {
           phoneDetectedSinceRef.current = now;
         }
-        nextStatus = { label: 'Phone detected', tone: 'danger' };
-        updateBehaviorSignals({ phone: 'Yes' });
-        if (now - phoneDetectedSinceRef.current >= PHONE_DETECTION_VIOLATION_WINDOW_MS) {
-          registerViolation('phoneDetected', 'Phone detected continuously for 2 seconds');
+        if (phoneStreakRef.current >= PHONE_CONFIRM_STREAK) {
+          updateBehaviorSignals({ phone: 'Yes' });
+          setLiveProctoringStatus('Phone detected', 'danger');
+        }
+        if (phoneStreakRef.current >= PHONE_VIOLATION_STREAK) {
+          registerViolation('phoneDetected', `Phone detected in ${phoneStreakRef.current} consecutive checks`);
           phoneDetectedSinceRef.current = now;
+          // Keep streak (don't reset to 0) so a genuinely held phone keeps
+          // re-flagging through the 12s violation cooldown; a transient
+          // false hit decays on the next clean frame below.
+          phoneStreakRef.current = PHONE_VIOLATION_STREAK;
         }
       } else {
         phoneDetectedSinceRef.current = null;
-        updateBehaviorSignals({ phone: 'No' });
-      }
-      if (nextStatus.label === 'Phone detected') {
-        setLiveProctoringStatus(nextStatus.label, nextStatus.tone);
+        // Decay instead of hard reset: one clean frame after a long streak
+        // doesn't instantly erase it, but two clean frames do.
+        phoneStreakRef.current = Math.max(0, phoneStreakRef.current - 2);
+        if (phoneStreakRef.current === 0) {
+          updateBehaviorSignals({ phone: 'No' });
+        }
       }
     }, PROCTORING_CHECK_INTERVAL_MS);
-  }, [detectPhoneFromCurrentFrame, registerViolation, setLiveProctoringStatus, updateBehaviorSignals]);
+  }, [detectPhoneFromCurrentFrame, registerViolation, setLiveProctoringStatus, startJeelizTracking, stopJeelizTracking, updateBehaviorSignals]);
 
   const startProctoring = useCallback(async ({ forceRestart = false } = {}) => {
     if (!isComputerVisionMode) return;
