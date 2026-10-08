@@ -1,6 +1,24 @@
 from sentence_transformers import SentenceTransformer
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    class RecursiveCharacterTextSplitter:  # type: ignore[no-redef]
+        def __init__(self, chunk_size: int = 700, chunk_overlap: int = 120):
+            self.chunk_size = chunk_size
+            self.chunk_overlap = chunk_overlap
+
+        def split_text(self, text: str) -> list[str]:
+            if not text:
+                return []
+            chunks = []
+            start = 0
+            while start < len(text):
+                end = start + self.chunk_size
+                chunk = text[start:end]
+                chunks.append(chunk)
+                start += self.chunk_size - self.chunk_overlap
+            return chunks
 
 from app.config import Settings
 

@@ -261,6 +261,38 @@ export function InterviewPage() {
     });
   }, []);
 
+  // Immediate tab switch & window blur detection
+  useEffect(() => {
+    if (!hasStarted || interviewFailed) return;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden || document.visibilityState === 'hidden') {
+        registerViolation('tabSwitch', 'Interview tab hidden / tab switched');
+        setLiveProctoringStatus('Interview tab hidden', 'danger');
+        updateBehaviorSignals({
+          face: 'Hidden tab',
+          lookAway: 'No',
+          lookingDown: 'No',
+          suspiciousMotion: 'No',
+        });
+      }
+    };
+
+    const handleBlur = () => {
+      if (document.hidden || document.visibilityState === 'hidden' || !document.hasFocus()) {
+        registerViolation('tabSwitch', 'Interview window lost focus');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [hasStarted, interviewFailed, registerViolation, setLiveProctoringStatus, updateBehaviorSignals]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -680,13 +712,7 @@ export function InterviewPage() {
       let nextStatus = { label: 'Monitoring camera', tone: 'neutral' };
 
       if (document.hidden) {
-        if (!hiddenSinceRef.current) {
-          hiddenSinceRef.current = now;
-        }
-        if (now - hiddenSinceRef.current >= TAB_SWITCH_VIOLATION_WINDOW_MS) {
-          registerViolation('tabSwitch', 'Interview tab hidden continuously for 7 seconds');
-          hiddenSinceRef.current = now;
-        }
+        registerViolation('tabSwitch', 'Interview tab hidden');
         setLiveProctoringStatus('Interview tab hidden', 'danger');
         noFaceSinceRef.current = null;
         phoneDetectedSinceRef.current = null;
@@ -896,6 +922,7 @@ export function InterviewPage() {
     setError('');
     setViolations([]);
     setProctoringError('');
+    lastViolationRef.current = {};
     resetProctoringSignals();
     setProctoringReady(false);
     if (monitorIntervalRef.current) {

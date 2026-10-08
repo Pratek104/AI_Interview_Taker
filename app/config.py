@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    openrouter_api_key: str
+    openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
     openrouter_temperature: float = 0.7
@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Used for gpt-audio-* (chat + modalities), not for dedicated *-tts-* speech API models.
     openrouter_tts_audio_format: str = "mp3"
     openrouter_tts_chat_temperature: float = 0.2
+
+    llm_provider: Literal["groq", "openrouter"] = "groq"
+    groq_llm_model: str = "qwen/qwen3.8-27b"
 
     tts_provider: Literal["groq", "openrouter"] = "groq"
     groq_api_key: str | None = None
@@ -50,12 +53,16 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def require_groq_key_for_groq_tts(self) -> "Settings":
+    def require_keys(self) -> "Settings":
         if self.tts_provider == "groq" and not (self.groq_api_key or "").strip():
             raise ValueError(
                 "GROQ_API_KEY is required when TTS_PROVIDER=groq. "
                 "Set it in .env or use TTS_PROVIDER=openrouter."
             )
+        has_openrouter = bool((self.openrouter_api_key or "").strip())
+        has_groq = bool((self.groq_api_key or "").strip())
+        if not has_openrouter and not has_groq:
+            raise ValueError("Either OPENROUTER_API_KEY or GROQ_API_KEY must be set in .env.")
         return self
 
     @property

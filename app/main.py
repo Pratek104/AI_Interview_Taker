@@ -51,7 +51,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-app.mount("/3dmodel", StaticFiles(directory=MODEL_DIR), name="3dmodel")
+if MODEL_DIR.exists():
+    app.mount("/3dmodel", StaticFiles(directory=MODEL_DIR), name="3dmodel")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin, "http://127.0.0.1:5173"],
