@@ -1,75 +1,89 @@
-# Scalable RAG Interview Chatbot
+# AI Interview Taker
 
-An AI-powered interview application that uses a candidate's CV to generate grounded interview questions and conduct a voice-enabled interview. The backend is built with FastAPI and PostgreSQL/pgvector; the frontend is a React application powered by Vite.
+AI Interview Taker is a CV-aware interview platform for practicing or conducting structured technical interviews. Candidates upload a PDF CV, choose a target role, and complete a conversational interview whose questions are grounded in the candidate's own experience.
 
-## How it works
+The project combines:
 
-1. A candidate selects a target role and uploads a PDF CV.
-2. The backend extracts CV text with OCR, splits it into chunks, generates `all-MiniLM-L6-v2` embeddings, and stores the chunks in PostgreSQL with pgvector.
-3. OpenRouter generates the CV summary, introduction, interview questions, and final score using the retrieved CV context.
-4. The React interview room presents the conversation and can request spoken interviewer responses.
-5. The proctoring endpoint can detect a phone in an uploaded image using YOLO.
+- **FastAPI** for the backend API
+- **React and Vite** for the interview interface
+- **PostgreSQL and pgvector** for CV embeddings and retrieval
+- **OpenRouter or Groq** for language-model responses
+- **Groq or OpenRouter audio models** for interviewer speech
+- **Tesseract and Poppler** for PDF text extraction and OCR
+- **YOLO** for optional phone-detection proctoring
+
+## Interview flow
+
+1. The candidate selects a target role and uploads a PDF CV.
+2. The backend extracts text, including from scanned PDFs, and splits it into chunks.
+3. The chunks are embedded with `all-MiniLM-L6-v2` and stored in PostgreSQL.
+4. The LLM summarizes the CV and generates an introduction and role-specific questions.
+5. Each candidate response retrieves relevant CV chunks before the next response is generated.
+6. The final interview response includes an AI-generated score and evaluation.
 
 ## Features
 
-- OCR extraction for searchable and scanned/image-based PDFs
-- Retrieval-augmented interview questions grounded in the uploaded CV
-- Role-specific interview sessions with introduction, Q&A, and final scoring phases
-- PostgreSQL vector storage with the `pgvector` extension
-- React setup pages and voice-orb interview interface
-- Configurable speech generation through Groq or OpenRouter
-- Optional phone detection for interview proctoring
-- Docker Compose setup for a local pgvector database
-- FastAPI serving of the built React application
+- CV upload and OCR for searchable or scanned PDFs
+- Retrieval-augmented, CV-grounded interview questions
+- Introduction, Q&A, and final scoring phases
+- Voice-enabled interviewer responses with timing metadata
+- React setup screens and voice-orb interview room
+- Optional YOLO phone detection through the proctoring API
+- Local PostgreSQL/pgvector environment through Docker Compose
+- Built React frontend served directly by FastAPI
 
 ## Prerequisites
 
-- Python 3.11 or newer
-- Node.js 18 or newer and npm
+- Python 3.11+
+- Node.js 18+ and npm
 - Docker Desktop
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
-- Poppler, required by `pdf2image`
+- Poppler for `pdf2image`
 - An OpenRouter API key
-- A Groq API key when `TTS_PROVIDER=groq` (the default)
+- A Groq API key when using the default Groq speech provider
 
-On Windows, set `TESSERACT_CMD` to the path of `tesseract.exe`. Set `POPPLER_PATH` when Poppler is not available on `PATH`.
+On Windows, install Tesseract and set `TESSERACT_CMD` to the full path of `tesseract.exe`. Set `POPPLER_PATH` if Poppler is not available on `PATH`.
 
-## Configuration
+## Quick start
 
-Create a local environment file:
+### 1. Configure environment variables
+
+From the repository root:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-At minimum, set:
+Set the provider keys in `.env`:
 
 ```dotenv
-OPENROUTER_API_KEY=your-openrouter-key
-GROQ_API_KEY=your-groq-key
+OPENROUTER_API_KEY=your-openrouter-api-key
+GROQ_API_KEY=your-groq-api-key
 ```
 
-The defaults in `.env.example` configure:
+The sample configuration uses:
 
-- OpenRouter as the LLM provider
-- Groq Orpheus as the speech provider
-- PostgreSQL on `localhost:15432`
-- `all-MiniLM-L6-v2` embeddings
+- PostgreSQL at `localhost:15432`
+- OpenRouter for the default LLM
+- Groq for speech generation
+- `all-MiniLM-L6-v2` for 384-dimensional embeddings
 - `http://localhost:5173` as the frontend origin
 
-Set `TTS_PROVIDER=openrouter` to use the OpenRouter audio model instead of Groq. `DEFAULT_AVATAR_URL` can point to a Ready Player Me `.glb` asset if an avatar URL is needed by the frontend.
+To use OpenRouter audio instead of Groq speech, set:
 
-## Local development
+```dotenv
+TTS_PROVIDER=openrouter
+```
 
-### 1. Start PostgreSQL with pgvector
+### 2. Start PostgreSQL and pgvector
 
 ```powershell
 docker compose up -d
 ```
 
-The database is exposed on host port `15432`. The first startup runs [`schema.sql`](./schema.sql), which creates the `vector` extension and `cv_chunks` table.
+The database is available on host port `15432`. On a new database volume, Docker runs [`schema.sql`](./schema.sql) automatically and creates the `vector` extension and `cv_chunks` table.
 
-### 2. Create the Python environment
+### 3. Install backend dependencies
 
 ```powershell
 python -m venv .venv
@@ -77,7 +91,7 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-### 3. Start the FastAPI backend
+### 4. Start the API
 
 From the repository root:
 
@@ -85,11 +99,14 @@ From the repository root:
 uvicorn app.main:app --reload
 ```
 
-The API is available at `http://127.0.0.1:8000`. Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
+The backend runs at `http://127.0.0.1:8000`.
 
-### 4. Start the React frontend
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- Health check: `http://127.0.0.1:8000/health`
 
-In a second terminal:
+### 5. Start the frontend
+
+Open a second terminal:
 
 ```powershell
 cd frontend\react_frontend
@@ -97,11 +114,11 @@ npm install
 npm run dev
 ```
 
-The Vite development server runs at `http://localhost:5173` and proxies API requests to FastAPI.
+The frontend runs at `http://localhost:5173`. Vite proxies API requests to the FastAPI server.
 
-## Production-style frontend serving
+## Production-style local run
 
-Build the frontend:
+Build the React application:
 
 ```powershell
 cd frontend\react_frontend
@@ -114,33 +131,34 @@ Then start FastAPI from the repository root:
 uvicorn app.main:app
 ```
 
-When `frontend/react_frontend/dist` exists, FastAPI serves the built React application and its routes.
+When `frontend/react_frontend/dist` exists, FastAPI serves the compiled React application and its routes.
 
-## API
+## API reference
 
 ### `GET /health`
 
-Returns the service health status:
+Returns:
 
 ```json
 {
   "status": "ok"
 }
 ```
+
 ### `POST /upload`
 
-Uploads a PDF CV and starts an interview session.
+Starts an interview session from a PDF CV.
 
 Multipart form fields:
 
 - `role_name`: target role, at least two characters
 - `file`: PDF CV
 
-The response includes `session_id`, CV metadata, the generated summary, and the opening interview message.
+The response includes the generated `session_id`, extracted character and chunk counts, CV summary, interview phase, and opening message.
 
 ### `POST /chat`
 
-Sends a candidate response and returns the next grounded interviewer response.
+Submits a candidate response:
 
 ```json
 {
@@ -149,11 +167,11 @@ Sends a candidate response and returns the next grounded interviewer response.
 }
 ```
 
-The response includes the current interview phase and the CV chunks retrieved for grounding.
+The response contains the next interviewer answer, current phase, and the CV context retrieved for grounding.
 
 ### `POST /generate-speech`
 
-Generates interviewer audio and timing metadata:
+Generates interviewer audio and word-boundary timing metadata:
 
 ```json
 {
@@ -165,21 +183,21 @@ Generates interviewer audio and timing metadata:
 
 ### `POST /proctoring/detect-phone`
 
-Uploads an image as the `image` multipart field and returns whether a phone was detected, along with the confidence and detected label.
+Uploads an image using the `image` multipart field. The response reports whether a phone was detected, its confidence, and the detected label.
 
 ### `GET /frontend-config`
 
-Returns frontend defaults such as the configured avatar URL and TTS voice.
+Returns frontend defaults including the configured avatar URL and default voice.
 
-## Testing and frontend checks
+## Testing and checks
 
-Run the Python tests:
+Run the backend tests:
 
 ```powershell
 python -m pytest
 ```
 
-Run the frontend lint and production build:
+Run frontend linting and a production build:
 
 ```powershell
 cd frontend\react_frontend
@@ -187,26 +205,29 @@ npm run lint
 npm run build
 ```
 
-## Project structure
+## Repository layout
 
 ```text
-app/                         FastAPI application and interview services
-  db.py                      PostgreSQL/pgvector persistence
-  interview.py               Session state and interview prompts
-  llm.py                     OpenRouter client
-  ocr.py                     PDF text extraction and OCR
-  proctoring.py              YOLO phone detection
-  rag.py                     Chunking and embeddings
-  speech.py                  Groq/OpenRouter speech generation
-frontend/react_frontend/     React/Vite client
-schema.sql                   PostgreSQL and pgvector schema
-docker-compose.yml           Local PostgreSQL/pgvector service
-requirements.txt             Python dependencies
+app/
+  config.py       Settings and environment validation
+  db.py           PostgreSQL and pgvector access
+  interview.py    Interview state and prompt construction
+  llm.py          LLM provider clients
+  ocr.py          PDF extraction and OCR
+  proctoring.py   YOLO phone detection
+  rag.py          Text chunking and embeddings
+  speech.py       Speech provider integration
+
+frontend/react_frontend/  React/Vite client
+schema.sql                PostgreSQL and pgvector schema
+docker-compose.yml        Local PostgreSQL service
+requirements.txt          Python dependencies
+.env.example              Environment variable template
 ```
 
-## Notes and limitations
+## Known limitations
 
-- Interview sessions are stored in process memory. Use Redis or PostgreSQL-backed session state for multi-instance deployments.
-- The embedding model produces 384-dimensional vectors, matching the database schema.
-- A fresh database volume runs `schema.sql` automatically. Existing volumes do not automatically rerun initialization scripts.
-- API error responses include the underlying pipeline failure message during development; review this before exposing the service publicly.
+- Interview state is stored in process memory and is not shared across backend instances.
+- Use Redis or PostgreSQL-backed session storage for a multi-instance deployment.
+- Existing Docker database volumes do not rerun initialization scripts automatically.
+- API error messages expose pipeline details intended for development; review error handling before public deployment.
