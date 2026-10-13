@@ -127,7 +127,6 @@ Returns the service health status:
   "status": "ok"
 }
 ```
-
 ### `POST /upload`
 
 Uploads a PDF CV and starts an interview session.
