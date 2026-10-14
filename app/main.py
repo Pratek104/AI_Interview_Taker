@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -33,7 +34,11 @@ rag_pipeline = RagPipeline(settings)
 interview_manager = InterviewManager()
 llm_client = OpenRouterClient(settings)
 speech_service = SpeechService(settings)
-proctoring_service = YoloProctoringService()
+proctoring_service = YoloProctoringService(
+    phone_confidence_threshold=settings.proctoring_phone_threshold,
+    inference_confidence=settings.proctoring_inference_conf,
+    inference_imgsz=settings.proctoring_imgsz,
+)
 MODEL_DIR = Path(__file__).resolve().parent.parent / "3dmodel"
 REACT_DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "react_frontend" / "dist"
 REACT_ASSETS_DIR = REACT_DIST_DIR / "assets"
@@ -219,7 +224,9 @@ async def detect_phone(image: UploadFile = File(...)) -> ProctoringDetectionResp
         image_bytes = await image.read()
         if not image_bytes:
             raise HTTPException(status_code=400, detail="Image payload is empty.")
-        result = proctoring_service.detect_phone(image_bytes)
+        # YOLO CPU inference blocks for ~0.1-1s: run it in a worker thread so
+        # the event loop stays responsive to chat/speech polling.
+        result = await asyncio.to_thread(proctoring_service.detect_phone, image_bytes)
         return ProctoringDetectionResponse(
             phone_detected=result.phone_detected,
             confidence=result.confidence,
@@ -227,6 +234,8 @@ async def detect_phone(image: UploadFile = File(...)) -> ProctoringDetectionResp
         )
     except HTTPException:
         raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Phone detection failed: {exc}") from exc
 

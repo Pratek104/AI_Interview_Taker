@@ -709,31 +709,38 @@ export function InterviewPage() {
   const detectPhoneFromCurrentFrame = useCallback(async () => {
     const video = cameraVideoRef.current;
     const canvas = captureCanvasRef.current;
-    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) return false;
-    if (phoneCheckInFlightRef.current) return false;
+    if (!video || !canvas || video.videoWidth === 0 || video.videoHeight === 0) return { detected: false, confidence: 0 };
+    if (phoneCheckInFlightRef.current) return { detected: false, confidence: 0 };
     // Skip frames while tab hidden or video stalled — stale frames are a
     // classic source of false "phone" hits.
-    if (document.hidden || video.readyState < 2 || video.paused || video.ended) return false;
+    if (document.hidden || video.readyState < 2 || video.paused || video.ended) return { detected: false, confidence: 0 };
 
     phoneCheckInFlightRef.current = true;
     try {
-      // Downscale to max 640px wide: matches model imgsz, cuts bandwidth,
-      // and removes tiny high-frequency false positives.
+      // Downscale to max 640px wide: cuts bandwidth while keeping enough
+      // detail for the server-side 960px inference to catch small phones.
       const scale = Math.min(1, 640 / video.videoWidth);
       canvas.width = Math.round(video.videoWidth * scale);
       canvas.height = Math.round(video.videoHeight * scale);
       const ctx = canvas.getContext('2d');
-      if (!ctx) return false;
+      if (!ctx) return { detected: false, confidence: 0 };
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-      if (!blob) return false;
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+      if (!blob) return { detected: false, confidence: 0 };
 
       const result = await detectPhoneInFrame(blob);
-      return Boolean(result.phone_detected);
-    } catch {
-      // Ignore transient detection request failures.
-      return false;
+      return {
+        detected: Boolean(result.phone_detected),
+        confidence: Number(result.confidence || 0),
+      };
+    } catch (err) {
+      // Surface transient failures in the console; previously these were
+      // swallowed, making a broken backend/proxy look like "no phone".
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('Phone detection request failed:', err?.message || err);
+      }
+      return { detected: false, confidence: 0 };
     } finally {
       phoneCheckInFlightRef.current = false;
     }
@@ -820,9 +827,11 @@ export function InterviewPage() {
       // --- Phone detection with streak confirmation ---
       // A single YOLO hit is NOT a violation: require consecutive positives
       // across polls so one stray false positive can't nuke merit.
-      const phoneDetected = await detectPhoneFromCurrentFrame();
+      // High-confidence hits (>=0.6) count double so an obvious phone flags
+      // immediately; borderline hits still need repeated confirmation.
+      const { detected: phoneDetected, confidence: phoneConfidence } = await detectPhoneFromCurrentFrame();
       if (phoneDetected) {
-        phoneStreakRef.current += 1;
+        phoneStreakRef.current += phoneConfidence >= 0.6 ? 2 : 1;
         if (!phoneDetectedSinceRef.current) {
           phoneDetectedSinceRef.current = now;
         }
@@ -840,9 +849,10 @@ export function InterviewPage() {
         }
       } else {
         phoneDetectedSinceRef.current = null;
-        // Decay instead of hard reset: one clean frame after a long streak
-        // doesn't instantly erase it, but two clean frames do.
-        phoneStreakRef.current = Math.max(0, phoneStreakRef.current - 2);
+        // Decay by 1 (not a hard reset): a single missed frame from motion
+        // blur shouldn't erase an ongoing streak, but two clean frames clear
+        // a transient false hit.
+        phoneStreakRef.current = Math.max(0, phoneStreakRef.current - 1);
         if (phoneStreakRef.current === 0) {
           updateBehaviorSignals({ phone: 'No' });
         }

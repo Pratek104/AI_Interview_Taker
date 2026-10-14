@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     top_k: int = 4
 
+    proctoring_phone_threshold: float = 0.30
+    proctoring_inference_conf: float = 0.15
+    proctoring_imgsz: int = 960
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
